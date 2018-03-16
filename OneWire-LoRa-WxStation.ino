@@ -9,7 +9,7 @@
  ************************************************************************************************/
 //#define SHOW_DALLAS_ERROR        // uncomment to show Dallas ( CRC ) errors on Serial.
 #define ONEWIRE_PIN           17    // OneWire Dallas sensors are connected to this pin
-#define MAX_NUMBER_OF_SENSORS 3    // maximum number of Dallas sensors
+#define MAX_NUMBER_OF_SENSORS 6    // maximum number of Dallas sensors
 
 #include <OneWire.h>
 #include <WiFi.h>
@@ -25,7 +25,7 @@ SSD1306  display(DISPLAY_ADDRESS, DISPLAY_SDA, DISPLAY_SDC);
 const char* ssid = "houser";
 const char* password = ""; //"----------";
 
-OneWire  ds( ONEWIRE_PIN );        // (a 4.7K pull-up resistor is necessary)
+OneWire  ds(ONEWIRE_PIN);        // (a 4.7K pull-up resistor is necessary)
 
 struct sensorStruct {
   byte addr[8];
@@ -33,12 +33,15 @@ struct sensorStruct {
   String name;
 } sensor[MAX_NUMBER_OF_SENSORS];
 
-byte numberOfFoundSensors;
+byte numberOfSensors;
 
 void setup() {
-  Serial.begin( 115200 );
-  Serial.println( "\n\nMultiple DS18B20 sensors as task ESP32 example." );
-  Serial.printf( "Connecting to %s with password %s\n", ssid,  password );
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB
+  }
+  Serial.begin(115200);
+  Serial.println("\n\nMultiple DS18B20 sensors as task ESP32 example.");
+  Serial.printf("Connecting to %s with password %s\n", ssid,  password);
 
   pinMode(DISPLAY_RESET, OUTPUT);
   digitalWrite(DISPLAY_RESET, LOW);    // set GPIO16 low to reset OLED
@@ -49,28 +52,35 @@ void setup() {
   display.setFont(ArialMT_Plain_10);
 
   xTaskCreatePinnedToCore(
-    tempTask,                       /* Function to implement the task */
-    "tempTask ",                    /* Name of the task */
+    taskReadSensors,                /* Function to implement the task */
+    "readSensors ",                 /* Name of the task */
     4000,                           /* Stack size in words */
     NULL,                           /* Task input parameter */
     5,                              /* Priority of the task */
     NULL,                           /* Task handle. */
     1);                             /* Core where the task should run */
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while ( WiFi.status() != WL_CONNECTED ) {
-    vTaskDelay( 250 /portTICK_PERIOD_MS );
-    Serial.print( "." );
-  } 
+  // WiFi.mode(WIFI_STA);
+  // WiFi.begin(ssid, password);
+  // while ( WiFi.status() != WL_CONNECTED ) {
+  //   vTaskDelay( 250 /portTICK_PERIOD_MS );
+  //   Serial.print( "." );
+  // }
+  display.drawString(0, 0, "Searching...");
+  display.display();
+
   Serial.println();
 }
 
 void loop() {
-  if ( numberOfFoundSensors ) {
+  if (numberOfSensors) {
     display.clear();
-    Serial.println( String( millis() / 1000.0 ) + " sec" );
-    for ( byte thisSensor = 0; thisSensor < numberOfFoundSensors; thisSensor++ ) {
+
+    Serial.print("\n\n");
+    Serial.print(String(millis() / 1000.0) + " sec");
+    Serial.printf(" %i Dallas sensors found.\n", numberOfSensors);
+    
+    for (byte thisSensor = 0; thisSensor < numberOfSensors; thisSensor++) {
       float celsius = (float)sensor[thisSensor].temp / 16.0;
       float fahrenheit = celsius * 1.8 + 32.0;
       String disp = String(fahrenheit, 2) + "°F " + String(celsius, 2) + "°C";
@@ -79,57 +89,78 @@ void loop() {
       display.drawString(0, thisSensor*16, disp);
       display.display();
 
-      Serial.println( sensor[thisSensor].name + ": " + String( (float)sensor[thisSensor].temp / 16.0 ) + "°C" );
+      printAddress(sensor[thisSensor].addr);
+      Serial.println(sensor[thisSensor].name + ": " + String((float)sensor[thisSensor].temp / 16.0) + "°C");
     }
   } else {
-    Serial.println( "No Dallas sensors." );
+    Serial.println("No Dallas sensors.");
   }
   
-  vTaskDelay( 1000 / portTICK_PERIOD_MS );
+  vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 
-void tempTask( void * pvParameters ) {
-  numberOfFoundSensors = 0;
+void printAddress(byte address[8]) {
+    for (uint8_t i = 0; i < 8; i++) {
+    if (address[i] < 0x10) {
+      Serial.print("0");
+    }
+    
+    Serial.print(address[i], HEX);
+    Serial.print(" ");
+  }  
+}
+
+int findOneWireDevices() {
+  int numberOfFoundSensors = 0;
   byte currentAddr[8];
-  while ( ds.search( currentAddr ) && numberOfFoundSensors < MAX_NUMBER_OF_SENSORS ) {
-    //Serial.write( "Sensor "); Serial.print( counter ); Serial.print( ":" );
-    for ( byte i = 0; i < 8; i++) {
-      //Serial.write(' ');
-      //Serial.print( currentAddr[i], HEX );
+  while (ds.search(currentAddr) && numberOfFoundSensors < MAX_NUMBER_OF_SENSORS) {
+    for (byte i = 0; i < 8; i++) {
       sensor[numberOfFoundSensors].addr[i] = currentAddr[i];
     }
 
     String chip = "";
-    switch ( currentAddr[0] ) {
+    switch (currentAddr[0]) {
         case 0x10:
-          chip = "DS18S20";  // or old DS1820
+          chip = "DS18S20 Temp";  // or old DS1820
           break;
-        case 0x28:
-          chip = "DS18B20";
+        case 0x1D:
+          chip = "DS2423 RAM/Counter";
+          break;
+        case 0x20:
+          chip = "DS2450 Quad A/D";
           break;
         case 0x22:
-          chip = "DS1822";
+          chip = "DS1822 Temp";
+          break;
+        case 0x28:
+          chip = "DS18B20 Temp";
+          break;
+        case 0x29:
+          chip = "DS2408 8 Switch";
+          break;
+        default:
+          //continue;
           break;
     }
         
-    sensor[numberOfFoundSensors].name = "T" + String(numberOfFoundSensors, DEC) + " " + chip;
+    sensor[numberOfFoundSensors].name = chip + "." + String(numberOfFoundSensors, DEC);
     numberOfFoundSensors++;
   }
   
-  Serial.printf( "%i Dallas sensors found.\n", numberOfFoundSensors );
+  return numberOfFoundSensors;  
+}
 
-  if ( !numberOfFoundSensors ) {
+void taskReadSensors(void * pvParameters) {
+  numberOfSensors = findOneWireDevices();
+  if (!numberOfSensors) {
     vTaskDelete( NULL );
   }
 
-  /* main temptask loop */
-
   while (1) {
-    for ( byte thisSensor = 0; thisSensor < numberOfFoundSensors; thisSensor++) {
-
+    for (byte thisSensor = 0; thisSensor < numberOfSensors; thisSensor++) {
       byte type_s;
       // the first ROM byte indicates which chip
-      switch ( sensor[thisSensor].addr[0] ) {
+      switch (sensor[thisSensor].addr[0]) {
         case 0x10:
           //Serial.println("  Chip = DS18S20");  // or old DS1820
           type_s = 1;
@@ -143,41 +174,36 @@ void tempTask( void * pvParameters ) {
           type_s = 0;
           break;
         default:
-#ifdef SHOW_DALLAS_ERROR
-          Serial.println("Device is not a DS18x20 family device.");
-#endif
-          return;
+          continue;
       }
 
       ds.reset();
-      ds.select( sensor[thisSensor].addr );
-      ds.write( 0x44, 1);        // start conversion, with parasite power off at the end
+      ds.select(sensor[thisSensor].addr);
+      ds.write(0x44, 0);        // start conversion, with parasite power off at the end
 
-      //vTaskDelay(1000);     // maybe 750ms is enough, maybe not
-      vTaskDelay( 750 / portTICK_PERIOD_MS); //wait for conversion ready
+      vTaskDelay(750 / portTICK_PERIOD_MS); //wait for conversion ready
 
       byte data[12];
       byte present = ds.reset();
-      ds.select( sensor[thisSensor].addr );
-      ds.write( 0xBE );         // Read Scratchpad
+      ds.select(sensor[thisSensor].addr);
+      ds.write(0xBE);         // Read Scratchpad
 
-      //Serial.print( "Sensor " );Serial.print( thisSensor ); Serial.print("  Data = ");
-      //Serial.println( present, HEX );
-      //Serial.print(" ");
+//      Serial.print( sensor[thisSensor].name ); 
+//      Serial.print("  Data = ");
+//      Serial.print( present, HEX );
+//      Serial.print(": ");
       for ( byte i = 0; i < 9; i++) { // we need 9 bytes
         data[i] = 0;
-        data[i] = ds.read(  );
-        //Serial.print(data[i], HEX);
-        //Serial.print(" ");
+        data[i] = ds.read();
+//        Serial.print(data[i], HEX);
+//        Serial.print(" ");
       }
       
-      //Serial.println();
+//      Serial.println();
 
-      if ( OneWire::crc8(data, 8) != data[8]) {
-#ifdef SHOW_DALLAS_ERROR
+      if (OneWire::crc8(data, 8) != data[8]) {
         // CRC of temperature reading indicates an error, so we print a error message and discard this reading
         Serial.print( millis() / 1000.0 ); Serial.print( " - CRC error from device " ); Serial.println( thisSensor );
-#endif
       } else {
         int16_t raw = (data[1] << 8) | data[0];
         if (type_s) {
