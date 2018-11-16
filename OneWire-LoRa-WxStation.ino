@@ -15,10 +15,7 @@
 //#define DLog(x) Serial.print(x)
 
 #include <OneWire.h>
-
 #include <DS2423.h>
-#include <DS2450.h>
-#include <DS2438.h>
 
 #include <SSD1306.h> /*https://github.com/ThingPulse/esp8266-oled-ssd1306*/
 #include <WiFi.h>
@@ -33,13 +30,13 @@ SSD1306  display(DISPLAY_ADDRESS, DISPLAY_SDA, DISPLAY_SDC);
 const char* ssid = "houser";
 const char* password = ""; //"----------";
 
-OneWire  ds(ONEWIRE_PIN);        // (a 4.7K pull-up resistor is necessary)
+OneWire  ds(ONEWIRE_PIN); // (a 4.7K pull-up resistor is necessary)
+DS2423 *ds2423 = NULL;
 
 struct sensorStruct {
   byte addr[8];
   float value;
   String name;
-  void *dsObject;
 } sensor[MAX_NUMBER_OF_SENSORS];
 
 byte numberOfSensors;
