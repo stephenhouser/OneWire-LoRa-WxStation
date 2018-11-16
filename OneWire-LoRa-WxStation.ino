@@ -11,9 +11,14 @@
 #define ONEWIRE_PIN           17    // OneWire Dallas sensors are connected to this pin
 #define MAX_NUMBER_OF_SENSORS 6    // maximum number of Dallas sensors
 
+#define DLog(x) 
+//#define DLog(x) Serial.print(x)
+
 #include <OneWire.h>
+#include <DS2423.h>
+
+#include <SSD1306.h> /*https://github.com/ThingPulse/esp8266-oled-ssd1306*/
 #include <WiFi.h>
-#include <SSD1306.h>
 
 #define DISPLAY_SDA 4
 #define DISPLAY_SDC 15
@@ -26,10 +31,10 @@ const char* ssid = "houser";
 const char* password = ""; //"----------";
 
 OneWire  ds(ONEWIRE_PIN);        // (a 4.7K pull-up resistor is necessary)
-
+DS2423 *ds2423 = NULL;
 struct sensorStruct {
   byte addr[8];
-  float temp;
+  float value;
   String name;
 } sensor[MAX_NUMBER_OF_SENSORS];
 
@@ -81,7 +86,7 @@ void loop() {
     Serial.printf(" %i Dallas sensors found.\n", numberOfSensors);
     
     for (byte thisSensor = 0; thisSensor < numberOfSensors; thisSensor++) {
-      float celsius = (float)sensor[thisSensor].temp / 16.0;
+      float celsius = (float)sensor[thisSensor].value;
       float fahrenheit = celsius * 1.8 + 32.0;
       String disp = String(fahrenheit, 2) + "°F " + String(celsius, 2) + "°C";
       display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -89,8 +94,8 @@ void loop() {
       display.drawString(0, thisSensor*16, disp);
       display.display();
 
-      printAddress(sensor[thisSensor].addr);
-      Serial.println(sensor[thisSensor].name + ": " + String((float)sensor[thisSensor].temp / 16.0) + "°C");
+      //printAddress(sensor[thisSensor].addr);
+      //Serial.println(sensor[thisSensor].name + ": " + String((float)sensor[thisSensor].value / 16.0) + "°C");
     }
   } else {
     Serial.println("No Dallas sensors.");
@@ -125,6 +130,8 @@ int findOneWireDevices() {
           break;
         case 0x1D:
           chip = "DS2423 RAM/Counter";
+          ds2423 = new DS2423(&ds, sensor[numberOfFoundSensors].addr);
+          ds2423->begin(DS2423_COUNTER_A);
           break;
         case 0x20:
           chip = "DS2450 Quad A/D";
@@ -150,6 +157,172 @@ int findOneWireDevices() {
   return numberOfFoundSensors;  
 }
 
+/* Read raw temperature data from OneWire.
+ * Used internallly by different temperature sensor functions.
+ */ 
+bool _readTemperatureBytes(byte *address, byte *data) {
+  ds.reset();
+  ds.select(address);
+  ds.write(0x44, 0); // start conversion, with parasite power off at the end
+
+  vTaskDelay(750 / portTICK_PERIOD_MS); //wait for conversion ready
+
+  byte present = ds.reset();
+  ds.select(address);
+  ds.write(0xBE); // Read Scratchpad
+  ds.read_bytes(data, 9);
+
+  if (OneWire::crc8(data, 8) == data[8]) {
+    return true;
+  }
+
+  return false;
+}
+
+/* Read temperature from DS18S20 devices */
+float readDS18S20(byte *address) {
+  byte data[12];
+
+  if (_readTemperatureBytes(address, data)) {
+    int16_t raw = (data[1] << 8) | data[0];
+    raw = raw << 3; // 9 bit resolution default
+    if (data[7] == 0x10) {
+      // "count remain" gives full 12 bit resolution
+      raw = (raw & 0xFFF0) + 12 - data[6];
+    }
+
+    return (float)raw / 16.0;
+  }
+
+  return 0.0;
+}
+
+/* Read temperature from DS1822 and DS18B20 devices */
+float readDS1822(byte *address) {
+  byte data[12];
+  if (_readTemperatureBytes(address, data)) {
+    int16_t raw = (data[1] << 8) | data[0];
+    byte cfg = (data[4] & 0x60);
+    // at lower res, the low bits are undefined, so let's zero them
+    if (cfg == 0x00) {
+      raw = raw & ~7; // 9 bit resolution, 93.75 ms
+    } else if (cfg == 0x20) {
+      raw = raw & ~3; // 10 bit res, 187.5 ms
+    } else if (cfg == 0x40) {
+      raw = raw & ~1; // 11 bit res, 375 ms
+    }
+
+    return (float)raw / 16.0;
+  }
+
+  return 0.0;
+}
+
+/* Convert revolutions per second to mph */
+float rps2mph(unsigned int rps) {
+  if ((rps >= 0) && (rps * 2.453 < 200.0)) {
+    return (float)rps * 2.453F;
+  }
+
+  return 0.0;
+}
+
+/* Convert mph to m/s */ 
+float mph2mps(float mph) { 
+  return mph * 0.447040972F; 
+}
+
+/* Read DS2423 Counter */
+
+uint32_t readRPS(byte *address) {
+  static unsigned long lastReadTimestamp = 0;
+  static uint32_t lastReadCount = 0;
+
+  ds2423->update();
+
+  unsigned long currentTimestamp = ds2423->getTimestamp();
+  uint32_t currentCount = ds2423->getCount(DS2423_COUNTER_A);
+
+  Serial.print("Last :");
+  Serial.print(lastReadTimestamp);
+  Serial.print(", ");
+  Serial.println(lastReadCount);
+
+  Serial.print("Raw  :");
+  Serial.print(currentTimestamp);
+  Serial.print(", ");
+  Serial.println(currentCount);
+
+  float count = currentCount - lastReadCount;
+  float milliSeconds = (currentTimestamp - lastReadTimestamp) / 1000.0;
+  unsigned long rps = (count / milliSeconds) / 2; /* two magnets */
+
+  Serial.print("Rev :");
+  Serial.print(count);
+  Serial.print(", ");
+  Serial.println(milliSeconds);
+
+  Serial.print("RPS  :");
+  Serial.println(rps);
+
+  lastReadCount = currentCount;
+  lastReadTimestamp = currentTimestamp;
+  return rps;
+}
+
+
+/*
+ * Two magnets mounted on a rotor attached to the wind cups axle that operate a
+ * reed switch connected to a DS2423 counter chip. One magnet is mounted in
+ * each of the two outermost holes of the rotor. This provides two counts per
+ * revolution which improves response at low wind speeds. It also provides
+ * rotational balance to the rotor, which becomes important with increasing
+ * wind speed, as the rotor can reach 2400 rpm in 160 km/h winds.
+ * The DS2423 keeps track of the total number of revolutions the wind cups make
+ * and provides the data to the bus master on demand. The chip contains two
+ * 232 bit counters and can be powered for ten years with a small Lithium
+ * battery, however, here power for the counter chip comes from CR1 and C1
+ * (Figure 1 again) which form a half wave rectifier that “steals” power from
+ * the data line. The DS2423 can only be reset to zero when this
+ * “parasite power” is lost. Wind speed is calculated by the bus master taking
+ * the difference between two counts of the counter used. One count generated
+ * before and the other after a clocked interval. The output is currently given
+ * in rpm. This later needs to be converted to m/s or km/h.
+*/
+uint32_t readWindSpeed(byte *address, byte counter) {
+
+}
+
+void taskReadSensors(void *pvParameters) {
+  numberOfSensors = findOneWireDevices();
+  if (!numberOfSensors) {
+    vTaskDelete(NULL);
+  }
+
+  while (1) {
+    for (byte thisSensor = 0; thisSensor < numberOfSensors; thisSensor++) {
+      // the first ROM byte indicates which chip
+      switch (sensor[thisSensor].addr[0]) {
+      case 0x10:
+        // Serial.println("  Chip = DS18S20");  // or old DS1820
+        sensor[thisSensor].value = readDS18S20(sensor[thisSensor].addr);
+        break;
+      case 0x1d:
+        sensor[thisSensor].value = readRPS(sensor[thisSensor].addr);
+        break;
+      case 0x22:
+      case 0x28:
+        // Serial.println("  Chip = DS18B20");
+        sensor[thisSensor].value = readDS1822(sensor[thisSensor].addr);
+        break;
+      default:
+        continue;
+      }
+    }
+  }
+}
+
+/*
 void taskReadSensors(void * pvParameters) {
   numberOfSensors = findOneWireDevices();
   if (!numberOfSensors) {
@@ -179,7 +352,8 @@ void taskReadSensors(void * pvParameters) {
 
       ds.reset();
       ds.select(sensor[thisSensor].addr);
-      ds.write(0x44, 0);        // start conversion, with parasite power off at the end
+      ds.write(0x44, 0);        // start conversion, with parasite power off at
+the end
 
       vTaskDelay(750 / portTICK_PERIOD_MS); //wait for conversion ready
 
@@ -188,7 +362,7 @@ void taskReadSensors(void * pvParameters) {
       ds.select(sensor[thisSensor].addr);
       ds.write(0xBE);         // Read Scratchpad
 
-//      Serial.print( sensor[thisSensor].name ); 
+//      Serial.print( sensor[thisSensor].name );
 //      Serial.print("  Data = ");
 //      Serial.print( present, HEX );
 //      Serial.print(": ");
@@ -198,17 +372,15 @@ void taskReadSensors(void * pvParameters) {
 //        Serial.print(data[i], HEX);
 //        Serial.print(" ");
       }
-      
+
 //      Serial.println();
 
       if (OneWire::crc8(data, 8) != data[8]) {
-        // CRC of temperature reading indicates an error, so we print a error message and discard this reading
-        Serial.print( millis() / 1000.0 ); Serial.print( " - CRC error from device " ); Serial.println( thisSensor );
-      } else {
-        int16_t raw = (data[1] << 8) | data[0];
-        if (type_s) {
-          raw = raw << 3; // 9 bit resolution default
-          if (data[7] == 0x10) {
+        // CRC of temperature reading indicates an error, so we print a error
+message and discard this reading Serial.print( millis() / 1000.0 );
+Serial.print( " - CRC error from device " ); Serial.println( thisSensor ); }
+else { int16_t raw = (data[1] << 8) | data[0]; if (type_s) { raw = raw << 3; //
+9 bit resolution default if (data[7] == 0x10) {
             // "count remain" gives full 12 bit resolution
             raw = (raw & 0xFFF0) + 12 - data[6];
           }
@@ -220,10 +392,11 @@ void taskReadSensors(void * pvParameters) {
           else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
           //// default is 12 bit resolution, 750 ms conversion time
         }
-        
+
         //Serial.println(raw);
-        sensor[thisSensor].temp = raw;
+        sensor[thisSensor].value = raw;
       }
     }
   }
 }
+*/

@@ -1,5 +1,19 @@
 OneWire Weather Station over LoRa
 
+## Dependencies
+
+* [Driver for the SSD1306 and SH1106](https://github.com/ThingPulse/esp8266-oled-ssd1306)
+* [OneWire - PJRC](https://www.pjrc.com/teensy/td_libs_OneWire.html)
+
+## Notes and References
+
+AAGElectronica/Dallas OneWire Weather Station
+
+* DS2450 Quad A/D
+* DS2423 RAM/Counter
+* DS1820 Temperature
+
+
 esp32 oled LoRa Wifi -- https://www.amazon.com/gp/product/B0781CPHT1/ref=oh_aui_detailpage_o02_s00?ie=UTF8&psc=1
 
 esp32 Install for Arduino -- https://github.com/espressif/arduino-esp32/blob/master/docs/arduino-ide/mac.md
@@ -14,7 +28,7 @@ OLED WxStation Notes -- https://github.com/osresearch/esp32-ttgo
 
 ```
 #include <Wire.h>
-#include <SSD1306.h>
+#include <SSD1306.h> 
 #include <OLEDDisplayUi.h>
 
 // OLED pins to ESP32 GPIOs via this connecthin:
@@ -39,3 +53,37 @@ void setup()
 OneWire via Weather Toys -- http://www.weathertoys.net/weathertoys/downloads.html
 
 Heltec ESP32 WiFi Lora -- https://robotzero.one/heltec-wifi-kit-32/
+
+
+
+weather.c in oww
+```
+  if (ws.gust_end_time > ws.gust_start_time)
+    {
+      /* calculate the wind speed based on the revolutions per second */
+      revolution_sec = (((double)(ws.gust_end_count - ws.gust_start_count) * 1000.0) /
+                        (double) (ws.gust_end_time - ws.gust_start_time)) / 2.0;
+      if (revolution_sec >= 0)
+      {
+        if ((revolution_sec >= 0)
+            && (revolution_sec * 2.453 < 200.0))
+        {
+          ws.anem_speed =
+            (float) revolution_sec
+            *2.453F;
+
+          /* Allow for calibration */
+          ws.anem_speed = ws.anem_speed *
+                          devices_list[devices_anem].
+                          calib[0];
+
+          if (ws.anem_speed > ws.anem_speed_max)
+            ws.anem_speed_max =
+              ws.anem_speed;
+          if (ws.anem_speed > ws.anem_int_gust_scratch)
+            ws.anem_int_gust_scratch =
+              ws.anem_speed;
+          //werr(WERR_DEBUG0, "%f", ws.anem_speed) ;
+        }
+        else
+```
