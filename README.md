@@ -26,6 +26,9 @@ OLED -- https://github.com/Heltec-Aaron-Lee/WiFi_Kit_series/tree/master/esp32/li
 
 OLED WxStation Notes -- https://github.com/osresearch/esp32-ttgo
 
+Basis for OneWire classes -- https://github.com/jbechter
+Much more extensive One Wire temperature library -- https://github.com/milesburton/Arduino-Temperature-Control-Library
+
 ```
 #include <Wire.h>
 #include <SSD1306.h> 
