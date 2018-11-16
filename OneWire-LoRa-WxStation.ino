@@ -15,7 +15,10 @@
 //#define DLog(x) Serial.print(x)
 
 #include <OneWire.h>
+
 #include <DS2423.h>
+#include <DS2450.h>
+#include <DS2438.h>
 
 #include <SSD1306.h> /*https://github.com/ThingPulse/esp8266-oled-ssd1306*/
 #include <WiFi.h>
@@ -31,14 +34,16 @@ const char* ssid = "houser";
 const char* password = ""; //"----------";
 
 OneWire  ds(ONEWIRE_PIN);        // (a 4.7K pull-up resistor is necessary)
-DS2423 *ds2423 = NULL;
+
 struct sensorStruct {
   byte addr[8];
   float value;
   String name;
+  void *dsObject;
 } sensor[MAX_NUMBER_OF_SENSORS];
 
 byte numberOfSensors;
+
 
 void setup() {
   while (!Serial) {
@@ -86,9 +91,10 @@ void loop() {
     Serial.printf(" %i Dallas sensors found.\n", numberOfSensors);
     
     for (byte thisSensor = 0; thisSensor < numberOfSensors; thisSensor++) {
-      float celsius = (float)sensor[thisSensor].value;
-      float fahrenheit = celsius * 1.8 + 32.0;
-      String disp = String(fahrenheit, 2) + "°F " + String(celsius, 2) + "°C";
+      // float celsius = (float)sensor[thisSensor].value;
+      // float fahrenheit = celsius * 1.8 + 32.0;
+      // String disp = String(fahrenheit, 2) + "°F " + String(celsius, 2) + "°C";
+      String disp = stringForSensorValue(&sensor[thisSensor]);
       display.setTextAlignment(TEXT_ALIGN_LEFT);
       display.setFont(ArialMT_Plain_16);
       display.drawString(0, thisSensor*16, disp);
@@ -102,6 +108,27 @@ void loop() {
   }
   
   vTaskDelay(1000 / portTICK_PERIOD_MS);
+}
+
+String stringForSensorValue(struct sensorStruct *sensor) {
+  switch (sensor->addr[0]) {
+    case 0x10:  // temperature
+    case 0x22:
+    case 0x28: {
+      float celsius = sensor->value;
+      float fahrenheit = celsius * 1.8 + 32.0;
+      return String(fahrenheit, 2) + "°F " + String(celsius, 2) + "°C";
+    }
+
+    case 0x1D:  // wind speed
+      return String(rps2mph(sensor->value), 2) + " mph";
+
+    case 0x20 : // wind direction                                                     break;
+    default:
+      break;
+  }
+
+  return "unknown";
 }
 
 void printAddress(byte address[8]) {
@@ -219,7 +246,7 @@ float readDS1822(byte *address) {
 }
 
 /* Convert revolutions per second to mph */
-float rps2mph(unsigned int rps) {
+float rps2mph(float rps) {
   if ((rps >= 0) && (rps * 2.453 < 200.0)) {
     return (float)rps * 2.453F;
   }
@@ -233,43 +260,27 @@ float mph2mps(float mph) {
 }
 
 /* Read DS2423 Counter */
-
-uint32_t readRPS(byte *address) {
+float readRPS(byte *address) {
   static unsigned long lastReadTimestamp = 0;
   static uint32_t lastReadCount = 0;
+  static float rps = 0.0;
 
-  ds2423->update();
+  // wait at least 1 second between reads to get semi-accurate measurements.
+  if ((millis() - lastReadTimestamp) >= 1000) {
+    ds2423->update();
+    unsigned long currentTimestamp = ds2423->getTimestamp();
+    uint32_t currentCount = ds2423->getCount(DS2423_COUNTER_A);
 
-  unsigned long currentTimestamp = ds2423->getTimestamp();
-  uint32_t currentCount = ds2423->getCount(DS2423_COUNTER_A);
+    float count = (currentCount - lastReadCount) * 1000.0;
+    float milliSeconds = (currentTimestamp - lastReadTimestamp);
+    rps = (count / milliSeconds) / 2; /* two magnets */
 
-  Serial.print("Last :");
-  Serial.print(lastReadTimestamp);
-  Serial.print(", ");
-  Serial.println(lastReadCount);
+    lastReadCount = currentCount;
+    lastReadTimestamp = currentTimestamp;
+  }
 
-  Serial.print("Raw  :");
-  Serial.print(currentTimestamp);
-  Serial.print(", ");
-  Serial.println(currentCount);
-
-  float count = currentCount - lastReadCount;
-  float milliSeconds = (currentTimestamp - lastReadTimestamp) / 1000.0;
-  unsigned long rps = (count / milliSeconds) / 2; /* two magnets */
-
-  Serial.print("Rev :");
-  Serial.print(count);
-  Serial.print(", ");
-  Serial.println(milliSeconds);
-
-  Serial.print("RPS  :");
-  Serial.println(rps);
-
-  lastReadCount = currentCount;
-  lastReadTimestamp = currentTimestamp;
   return rps;
 }
-
 
 /*
  * Two magnets mounted on a rotor attached to the wind cups axle that operate a
