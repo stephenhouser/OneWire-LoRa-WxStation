@@ -89,4 +89,8 @@ weather.c in oww
           //werr(WERR_DEBUG0, "%f", ws.anem_speed) ;
         }
         else
+...
+ /* Convert mph to m/s */
+    ws.anem_mps = ws.anem_speed * 0.447040972F;
+
 ```

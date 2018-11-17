@@ -71,9 +71,9 @@ void loop() {
   if (numberOfDevices) {
     display.clear();
 
-    Serial.print("\n\n");
-    Serial.print(String(millis() / 1000.0) + " sec");
-    Serial.printf(" %i OneWire devices found.\n", numberOfDevices);
+    // Serial.print("\n\n");
+    // Serial.print(String(millis() / 1000.0) + " sec");
+    // Serial.printf(" %i OneWire devices found.\n", numberOfDevices);
 
     for (byte d = 0; d < numberOfDevices; d++) {
       String disp = devices[d]->toString();
@@ -83,7 +83,7 @@ void loop() {
       display.drawString(0, (d * 16), disp);
       display.display();
 
-      Serial.println(disp);
+      //Serial.println(disp);
     }
   } else {
     Serial.println("No OneWire Devices.");
