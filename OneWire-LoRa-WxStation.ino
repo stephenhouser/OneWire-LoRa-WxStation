@@ -19,6 +19,11 @@
 
 #include <SSD1306.h> /*https://github.com/ThingPulse/esp8266-oled-ssd1306*/
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ESPmDNS.h>
+
+extern bool wifi_verify(int timeout);
 
 #define DISPLAY_SDA 4
 #define DISPLAY_SDC 15
@@ -33,63 +38,73 @@ byte numberOfDevices = 0;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n\nMultiple DS18B20 sensors as task ESP32 example.");
+  Serial.println("OneWire WxStation\n");
 
   // Initialize OLED Display
   pinMode(DISPLAY_RESET, OUTPUT);
   digitalWrite(DISPLAY_RESET, LOW);    // set GPIO16 low to reset OLED
   delay(50); 
   digitalWrite(DISPLAY_RESET, HIGH); // while OLED is running, must set GPIO16 in high
+
   display.init();
   display.flipScreenVertically();
   display.setFont(ArialMT_Plain_10);
 
   // Start Device Reading Task on second core
-  xTaskCreatePinnedToCore(
+  // xTaskCreatePinnedToCore(
+  //     taskUpdateDevices, /* Function to implement the task */
+  //     "updateDevices ",    /* Name of the task */
+  //     4000,              /* Stack size in words */
+  //     NULL,              /* Task input parameter */
+  //     5,                 /* Priority of the task */
+  //     NULL,              /* Task handle. */
+  //     1);                /* Core where the task should run */
+  xTaskCreate(
       taskUpdateDevices, /* Function to implement the task */
-      "updateDevices ",    /* Name of the task */
+      "updateDevices ",  /* Name of the task */
       4000,              /* Stack size in words */
       NULL,              /* Task input parameter */
       5,                 /* Priority of the task */
-      NULL,              /* Task handle. */
-      1);                /* Core where the task should run */
+      NULL);              /* Task handle. */
 
-  // WiFi.mode(WIFI_STA);
-  // WiFi.begin(ssid, password);
-  // while ( WiFi.status() != WL_CONNECTED ) {
-  //   vTaskDelay( 250 /portTICK_PERIOD_MS );
-  //   Serial.print( "." );
-  // }
-
-  display.drawString(0, 0, "Searching...");
-  display.display();
-
-  Serial.println();
+  // xTaskCreatePinnedToCore(taskMaintainWiFi, "maintainWiFi", 1024, NULL, 2,
+  //                         NULL, 1);
 }
 
 void loop() {
-  if (numberOfDevices) {
-    display.clear();
-
-    // Serial.print("\n\n");
-    // Serial.print(String(millis() / 1000.0) + " sec");
-    // Serial.printf(" %i OneWire devices found.\n", numberOfDevices);
-
-    for (byte d = 0; d < numberOfDevices; d++) {
-      String disp = devices[d]->toString();
-
-      display.setTextAlignment(TEXT_ALIGN_LEFT);
-      display.setFont(ArialMT_Plain_16);
-      display.drawString(0, (d * 16), disp);
-      display.display();
-
-      //Serial.println(disp);
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi Searching...");
+        display.drawString(0, 0, "WiFi Searching...");
+        display.display();
+        wifi_verify(30);
     }
-  } else {
-    Serial.println("No OneWire Devices.");
-  }
-  
-  vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    if (numberOfDevices) {
+        display.clear();
+
+        // Serial.print("\n\n");
+        // Serial.print(String(millis() / 1000.0) + " sec");
+        // Serial.printf(" %i OneWire devices found.\n", numberOfDevices);
+
+        for (byte d = 0; d < numberOfDevices; d++) {
+          String disp = devices[d]->toString();
+
+          display.setTextAlignment(TEXT_ALIGN_LEFT);
+          display.setFont(ArialMT_Plain_16);
+          display.drawString(0, (d * 16), disp);
+          display.display();
+
+          Serial.print(disp);
+          Serial.print(" ==> ");
+          Serial.println(devices[d]->toJSON());
+        }
+      } else {
+        Serial.println("No OneWire Devices.");
+    }
+
+    Serial.println("");
+    //Serial.println("Core:" + String(xPortGetCoreID()));
+    delay(1000);  /* every 1 second */
 }
 
 int findDevices() {
@@ -107,6 +122,10 @@ int findDevices() {
 }
 
 void taskUpdateDevices(void *pvParameters) {
+  Serial.println("1-Wire Searching...");
+  display.drawString(0, 0, "1-Wire Searching...");
+  display.display();
+
   numberOfDevices = findDevices();
   if (!numberOfDevices) {
     vTaskDelete(NULL);
@@ -118,4 +137,14 @@ void taskUpdateDevices(void *pvParameters) {
       device->update();
     }
   } 
+}
+
+void hexdump(uint8_t *data, int len) {
+  for (int i = 0; i < len; i++) {
+    Serial.printf("%02x ", data[i]);
+    if (i % 16 == 0) {
+      Serial.println("");
+    }
+  }
+  Serial.println("");
 }
