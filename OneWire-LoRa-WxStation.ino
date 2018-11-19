@@ -11,9 +11,6 @@
 #define ONEWIRE_PIN           17    // OneWire Dallas sensors are connected to this pin
 #define MAX_NUMBER_OF_DEVICES 6     // maximum number of Dallas sensors
 
-#define DLog(x) 
-//#define DLog(x) Serial.print(x)
-
 #include <OneWire.h>
 #include <OneWireDevice.h>
 
@@ -40,45 +37,35 @@ void setup() {
   Serial.begin(115200);
   Serial.println("OneWire WxStation\n");
 
-  // Initialize OLED Display
-  pinMode(DISPLAY_RESET, OUTPUT);
-  digitalWrite(DISPLAY_RESET, LOW);    // set GPIO16 low to reset OLED
-  delay(50); 
-  digitalWrite(DISPLAY_RESET, HIGH); // while OLED is running, must set GPIO16 in high
-
-  display.init();
-  display.flipScreenVertically();
-  display.setFont(ArialMT_Plain_10);
-
-  // Start Device Reading Task on second core
-  // xTaskCreatePinnedToCore(
-  //     taskUpdateDevices, /* Function to implement the task */
-  //     "updateDevices ",    /* Name of the task */
-  //     4000,              /* Stack size in words */
-  //     NULL,              /* Task input parameter */
-  //     5,                 /* Priority of the task */
-  //     NULL,              /* Task handle. */
-  //     1);                /* Core where the task should run */
-  xTaskCreate(
-      taskUpdateDevices, /* Function to implement the task */
-      "updateDevices ",  /* Name of the task */
-      4000,              /* Stack size in words */
-      NULL,              /* Task input parameter */
-      5,                 /* Priority of the task */
-      NULL);              /* Task handle. */
-
-  // xTaskCreatePinnedToCore(taskMaintainWiFi, "maintainWiFi", 1024, NULL, 2,
-  //                         NULL, 1);
+  setup_display();
+  setup_wifi();
+  setup_sensors();
 }
 
 void loop() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi Searching...");
-        display.drawString(0, 0, "WiFi Searching...");
-        display.display();
-        wifi_verify(30);
-    }
+  loop_wifi();
+  loop_display();
+  loop_pubsub();
 
+  delay(1000); /* every 1 second */
+}
+
+bool setup_display() {
+    // Initialize OLED Display
+    pinMode(DISPLAY_RESET, OUTPUT);
+    digitalWrite(DISPLAY_RESET, LOW); // set GPIO16 low to reset OLED
+    delay(50);
+    digitalWrite(DISPLAY_RESET,
+                HIGH); // while OLED is running, must set GPIO16 in high
+
+    display.init();
+    display.flipScreenVertically();
+    display.setFont(ArialMT_Plain_10);
+
+    return true;
+}
+
+void loop_display() {
     if (numberOfDevices) {
         display.clear();
 
@@ -87,64 +74,97 @@ void loop() {
         // Serial.printf(" %i OneWire devices found.\n", numberOfDevices);
 
         for (byte d = 0; d < numberOfDevices; d++) {
-          String disp = devices[d]->toString();
+            String disp = devices[d]->toString();
 
-          display.setTextAlignment(TEXT_ALIGN_LEFT);
-          display.setFont(ArialMT_Plain_16);
-          display.drawString(0, (d * 16), disp);
-          display.display();
+            display.setTextAlignment(TEXT_ALIGN_LEFT);
+            display.setFont(ArialMT_Plain_16);
+            display.drawString(0, (d * 16), disp);
 
-          Serial.print(disp);
-          Serial.print(" ==> ");
-          Serial.println(devices[d]->toJSON());
+            Serial.print(disp);
+            Serial.print(" ==> ");
+            Serial.println(devices[d]->toJSON());
         }
-      } else {
+
+        display.display();
+    } else {
         Serial.println("No OneWire Devices.");
     }
 
     Serial.println("");
-    //Serial.println("Core:" + String(xPortGetCoreID()));
-    delay(1000);  /* every 1 second */
+}
+
+bool setup_sensors() {
+    xTaskCreate(taskUpdateDevices, /* Function to implement the task */
+                "updateDevices ",  /* Name of the task */
+                4000,              /* Stack size in words */
+                NULL,              /* Task input parameter */
+                5,                 /* Priority of the task */
+                NULL);             /* Task handle. */
+
+  // Start Device Reading Task pinned on second core
+  // xTaskCreatePinnedToCore(
+  //     taskUpdateDevices, /* Function to implement the task */
+  //     "updateDevices ",    /* Name of the task */
+  //     4000,              /* Stack size in words */
+  //     NULL,              /* Task input parameter */
+  //     5,                 /* Priority of the task */
+  //     NULL,              /* Task handle. */
+  //     1);                /* Core where the task should run */
+
+  // xTaskCreatePinnedToCore(taskMaintainWiFi, "maintainWiFi", 1024, NULL, 2,
+  //                         NULL, 1);
+  return true;
 }
 
 int findDevices() {
-  int numberOfFoundDevices = 0;
-  uint8_t address[8];
-  while (oneWire.search(address) && numberOfFoundDevices < MAX_NUMBER_OF_DEVICES) {
-    OneWireDevice *device = OneWireDevice::objectForDevice(&oneWire, (uint8_t *)&address);
-    if (device != NULL) {
-      devices[numberOfFoundDevices++] = device;
-      device->begin();
+    int numberOfFoundDevices = 0;
+    uint8_t address[8];
+    while (oneWire.search(address) && numberOfFoundDevices < MAX_NUMBER_OF_DEVICES) {
+        OneWireDevice *device = OneWireDevice::objectForDevice(&oneWire, (uint8_t *)&address);
+        if (device != NULL) {
+            devices[numberOfFoundDevices++] = device;
+            device->begin();
+        }
     }
-  }
 
-  return numberOfFoundDevices;
+    return numberOfFoundDevices;
 }
 
 void taskUpdateDevices(void *pvParameters) {
-  Serial.println("1-Wire Searching...");
-  display.drawString(0, 0, "1-Wire Searching...");
-  display.display();
-
-  numberOfDevices = findDevices();
-  if (!numberOfDevices) {
-    vTaskDelete(NULL);
-  }
-
-  while (1) {
-    for (int d = 0; d < numberOfDevices; d++) {
-      OneWireDevice *device = devices[d];
-      device->update();
+    // Serial.println("1-Wire Searching...");
+    // display.drawString(0, 0, "1-Wire Searching...");
+    // display.display();
+    numberOfDevices = findDevices();
+    if (!numberOfDevices) {
+        // should this just be return? or should it be done during setup?
+        vTaskDelete(NULL);
     }
-  } 
+
+    while (1) {
+        for (int d = 0; d < numberOfDevices; d++) {
+            OneWireDevice *device = devices[d];
+            device->update();
+        }
+    } 
 }
 
-void hexdump(uint8_t *data, int len) {
-  for (int i = 0; i < len; i++) {
-    Serial.printf("%02x ", data[i]);
-    if (i % 16 == 0) {
-      Serial.println("");
-    }
+bool setup_wifi() {
+  return true;
+}
+
+void loop_wifi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi Searching...");
+    // display.drawString(0, 0, "WiFi Searching...");
+    // display.display();
+    wifi_verify(30);
   }
-  Serial.println("");
+}
+
+bool setup_pubsub() {
+
+}
+
+void loop_pubsub() {
+
 }
