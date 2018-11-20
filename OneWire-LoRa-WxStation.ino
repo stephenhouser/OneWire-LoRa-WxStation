@@ -22,10 +22,21 @@
 
 extern bool wifi_verify(int timeout);
 
+#define SENSOR_SAMPLE_SECONDS 1
+#define WIFI_CHECK_TIMEOUT_SECONDS  30
+
 #define DISPLAY_SDA 4
 #define DISPLAY_SDC 15
 #define DISPLAY_RESET 16
 #define DISPLAY_ADDRESS 0x3c
+
+#define MQTT_SERVER "192.168.69.4"
+#define MQTT_PORT 1883
+#define MQTT_CLIENTID "WxStation"
+#define MQTT_USERNAME "writer"
+
+#define MQTT_TOPIC MQTT_CLIENTID
+#define MQTT_PUBLISH_INTERVAL_SECONDS  60
 
 SSD1306 display(DISPLAY_ADDRESS, DISPLAY_SDA, DISPLAY_SDC);
 OneWire oneWire(ONEWIRE_PIN); // (a 4.7K pull-up resistor is necessary)
@@ -33,30 +44,36 @@ OneWire oneWire(ONEWIRE_PIN); // (a 4.7K pull-up resistor is necessary)
 OneWireDevice *devices[MAX_NUMBER_OF_DEVICES];
 byte numberOfDevices = 0;
 
-void setup() {
-  Serial.begin(115200);
-  Serial.println("OneWire WxStation\n");
+WiFiClient wifiClient;
+PubSubClient mqtt(wifiClient);
 
-  setup_display();
-  setup_wifi();
-  setup_sensors();
+void setup() {
+    Serial.begin(115200);
+    Serial.println("OneWire WxStation\n");
+
+    setup_display();
+    setup_sensors();
+    setup_wifi();
+    setup_mqtt();
 }
 
 void loop() {
-  loop_wifi();
-  loop_display();
-  loop_pubsub();
+    loop_display();
+    //loop_sensors(); <-- this is done in a seprate task on ESP32
+    loop_wifi();
+    loop_mqtt();
 
-  delay(1000); /* every 1 second */
+    delay(1000); /* every 1 second */
 }
+
+// ==== DISPLAY ====
 
 bool setup_display() {
     // Initialize OLED Display
     pinMode(DISPLAY_RESET, OUTPUT);
     digitalWrite(DISPLAY_RESET, LOW); // set GPIO16 low to reset OLED
     delay(50);
-    digitalWrite(DISPLAY_RESET,
-                HIGH); // while OLED is running, must set GPIO16 in high
+    digitalWrite(DISPLAY_RESET, HIGH); // while OLED is running, must set GPIO16 in high
 
     display.init();
     display.flipScreenVertically();
@@ -66,34 +83,51 @@ bool setup_display() {
 }
 
 void loop_display() {
+    display.clear();
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.setFont(ArialMT_Plain_16);
+
+    // Serial.println("Timestamp:" + String(millis()));
+
+    if (WiFi.status() != WL_CONNECTED) {
+        display.drawCircle(128 - 3, 3, 2);
+    } else {
+        display.fillCircle(128 - 3, 3, 3);
+    }
+
     if (numberOfDevices) {
-        display.clear();
-
-        // Serial.print("\n\n");
-        // Serial.print(String(millis() / 1000.0) + " sec");
-        // Serial.printf(" %i OneWire devices found.\n", numberOfDevices);
-
         for (byte d = 0; d < numberOfDevices; d++) {
             String disp = devices[d]->toString();
 
-            display.setTextAlignment(TEXT_ALIGN_LEFT);
-            display.setFont(ArialMT_Plain_16);
             display.drawString(0, (d * 16), disp);
 
-            Serial.print(disp);
-            Serial.print(" ==> ");
-            Serial.println(devices[d]->toJSON());
+            // Serial.print(disp);
+            // Serial.print(" ==> ");
+            // Serial.println(devices[d]->toJSON());
         }
-
-        display.display();
     } else {
-        Serial.println("No OneWire Devices.");
+        display.drawString(0, 0, "No Devices");
+        Serial.println("No Devices");
     }
 
-    Serial.println("");
+    display.display();
+    // Serial.println("");
 }
 
+// ==== SENSORS ====
+
 bool setup_sensors() {
+    display.clear();
+    display.drawString(0, 0, "1-Wire Searching...");
+    display.display();
+    Serial.println("1-Wire Searching...");
+
+    numberOfDevices = findDevices();
+    if (!numberOfDevices) {
+        // should this just be return? or should it be done during setup?
+        return false;
+    }
+
     xTaskCreate(taskUpdateDevices, /* Function to implement the task */
                 "updateDevices ",  /* Name of the task */
                 4000,              /* Stack size in words */
@@ -111,9 +145,16 @@ bool setup_sensors() {
   //     NULL,              /* Task handle. */
   //     1);                /* Core where the task should run */
 
-  // xTaskCreatePinnedToCore(taskMaintainWiFi, "maintainWiFi", 1024, NULL, 2,
-  //                         NULL, 1);
-  return true;
+    return true;
+}
+
+void loop_sensors() {
+    for (int d = 0; d < numberOfDevices; d++) {
+        OneWireDevice *device = devices[d];
+        device->update();
+    }
+
+    delay(SENSOR_SAMPLE_SECONDS * 1000);
 }
 
 int findDevices() {
@@ -131,40 +172,78 @@ int findDevices() {
 }
 
 void taskUpdateDevices(void *pvParameters) {
-    // Serial.println("1-Wire Searching...");
-    // display.drawString(0, 0, "1-Wire Searching...");
-    // display.display();
-    numberOfDevices = findDevices();
-    if (!numberOfDevices) {
-        // should this just be return? or should it be done during setup?
-        vTaskDelete(NULL);
-    }
-
-    while (1) {
-        for (int d = 0; d < numberOfDevices; d++) {
-            OneWireDevice *device = devices[d];
-            device->update();
-        }
+    while (true) {
+        loop_sensors();
     } 
 }
 
-bool setup_wifi() {
-  return true;
+// ==== WiFi ====
+
+bool setup_wifi() { 
+    display.clear();
+    display.drawString(0, 0, "WiFi Searching...");
+    display.display();
+
+    Serial.println("WiFi Searching...");
+   return wifi_verify(WIFI_CHECK_TIMEOUT_SECONDS);
 }
 
 void loop_wifi() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi Searching...");
-    // display.drawString(0, 0, "WiFi Searching...");
-    // display.display();
-    wifi_verify(30);
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi Searching...");
+        wifi_verify(WIFI_CHECK_TIMEOUT_SECONDS);
+        Serial.println("");
+    }
+}
+
+// ==== MQTT ====
+
+bool setup_mqtt() {
+  if (WiFi.status() == WL_CONNECTED) {
+    //   display.clear();
+    //   display.drawString(0, 0, "MQTT Connecting...");
+    //   display.display();
+
+      Serial.print("MQTT Connecting...");
+      mqtt.setServer(MQTT_SERVER, MQTT_PORT);
+      while (!mqtt.connected()) {
+          if (mqtt.connect(MQTT_CLIENTID, MQTT_USERNAME, MQTT_PASSWORD)) {
+            Serial.println("connected");
+            // String topic = String(MQTT_TOPIC) + String("/birth");
+            // String payload = "{ \"message\": \"It's alive!\" }";
+            // mqtt.publish(topic.c_str(), payload.c_str());
+            return true;
+          }
+      }
   }
 }
 
-bool setup_pubsub() {
+void loop_mqtt() {
+    static uint32_t lastPublish = 0;
+    if (((millis() - lastPublish) >= (1000 * MQTT_PUBLISH_INTERVAL_SECONDS))) {
+        if (!mqtt.connected()) {
+            setup_mqtt();
+        }
 
-}
+        if (mqtt.connected()) {
+            Serial.println("MQTT Publish...");
+            for (byte d = 0; d < numberOfDevices; d++) {
+                OneWireDevice *device = devices[d];
+                String topic = String(MQTT_TOPIC) + String("/") + String(device->getAddressString());
+                String payload = device->toJSON();
 
-void loop_pubsub() {
+                mqtt.publish(topic.c_str(), payload.c_str());
 
+                Serial.print(device->toString());
+                Serial.print(" ==> ");
+                Serial.print(topic);
+                Serial.print(": ");
+                Serial.println(payload);
+
+                device->reset();
+            }
+        }
+
+        lastPublish = millis();
+    }
 }
