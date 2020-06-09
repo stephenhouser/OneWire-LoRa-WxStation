@@ -223,7 +223,7 @@ void setup_DS2450(byte address[]) {
    ow.write(DS2450_CONTROL_STATUS_DATA_ADDR_LO, 0);
    ow.write(DS2450_CONTROL_STATUS_DATA_ADDR_HI, 0);
     for (int i = 0; i < 4; i++) {
-      ow.write(0/*DS2450_8_BIT_RESOLUTION*/, 0);
+      ow.write(0 /*DS2450_8_BIT_RESOLUTION*/, 0);
       ow.read(); // crc
       ow.read();
       ow.read(); // verify data
@@ -237,48 +237,10 @@ void setup_DS2450(byte address[]) {
 
 #if 0
 String wind_dir(float voltages[]) {
-  float Va = voltages[0];
-  float Vb = voltages[1];
-  float Vc = voltages[2];
-  float Vd = voltages[3];
 
-  float Vmax=Va;
-  if (Vb>Vmax) Vmax=Vb;
-  if (Vc>Vmax) Vmax=Vc;
-  if (Vd>Vmax) Vmax=Vd;
-  
   float VL1=Vmax*0.83;
   float VL2=Vmax*0.58;
   float VL3=Vmax*0.25;
-
-
-    a=5;
-    if (Va<VL1) a=3;
-    if (Va<VL2) a=2;
-    if (Va<VL3) a=0;
-
-    b=5;
-    if (Vb<VL1) b=3;
-    if (Vb<VL2) b=2;
-    if (Vb<VL3) b=0;
-
-    c=5;
-    if (Vc<VL1) c=3;
-    if (Vc<VL2) c=2;
-    if (Vc<VL3) c=0;
-
-    d=5;
-    if (Vd<VL1) d=3;
-    if (Vd<VL2) d=2;
-    if (Vd<VL3) d=0;
-
-
-      // N voltage=2.78, 3.95, 4.97, 4.35
-      //   voltage=2.61, 4.28, 4.59, 3.05
-      // E voltage=2.93, 4.84, 3.94, 3.48
-      //   voltage=4.56, 4.60, 4.05, 3.47
-      // S voltage=4.56, 4.88, 0.16, 3.48
-      // W voltage=0.11, 3.96, 2.74, 4.33
 
 
     private String[] tabla={"5255", "5335","5525","5533", 
@@ -299,6 +261,13 @@ String wind_dir(float voltages[]) {
 }
 #endif 
 
+int decode(float x, float max) {
+  if (x > (max * 0.83)) return 5;
+  if (x > (max * 0.58)) return 3;
+  if (x > (max * 0.25))  return 2;
+  return 0;
+}
+
 int16_t read_DS2450(byte address[]) {
   if (address[0] == 0x20) {
     // Serial.print("read_DS2450: ");
@@ -315,11 +284,6 @@ int16_t read_DS2450(byte address[]) {
       vTaskDelay(10 * portTICK_PERIOD_MS);     //wait for conversion ready
 
       ow_read(data + 3, 2);
-
-      // char line[256];
-      // snprintf(line, 256, "PRE: %2.2x %2.2x", data[3], data[4]);
-      // Serial.println(line);
-
       if (ow.reset()) {
         ow.select(address);
         data[0] = DS2450_MEMORY_READ_COMMAND;    // Read PIO Registers
@@ -327,27 +291,37 @@ int16_t read_DS2450(byte address[]) {
         data[2] = DS2450_AD_CHANNELS_ADDR_HI;    // MSB address
         ow_write(data, 3);
         ow_read(data + 3, 10);
-
-        // Serial.print("READ: ");
-        // for (int i = 0; i < 13; i++) {
-        //     Serial.print(String(data[i], HEX) + " ");
-        // }
-        // Serial.println("");
-
         if (crc16(data, 13)) {
             float voltage[4];
             voltage[0] = (float)((data[4] << 8) | data[3]) / 12580.0;
             voltage[1] = (float)((data[6] << 8) | data[5]) / 12580.0;
             voltage[2] = (float)((data[8] << 8) | data[7]) / 12580.0;
             voltage[3] = (float)((data[10] << 8) | data[9]) / 12580.0;
-            Serial.print("voltage=");
-            Serial.print(voltage[0]);
+            // voltage[0] = ((data[4] << 8) | data[3]);
+            // voltage[1] = ((data[6] << 8) | data[5]);
+            // voltage[2] = ((data[8] << 8) | data[7]);
+            // voltage[3] = ((data[10] << 8) | data[9]);
+
+            Serial.print(voltage[0]);            
             Serial.print(", ");
             Serial.print(voltage[1]);
             Serial.print(", ");
             Serial.print(voltage[2]);
             Serial.print(", ");
             Serial.print(voltage[3]);
+            Serial.println("");
+
+            float xmax = max(voltage[0], voltage[1]);
+            xmax = max(xmax, voltage[2]);
+            xmax = max(xmax, voltage[3]);
+
+            Serial.print(decode(voltage[0], xmax));            
+            Serial.print(", ");
+            Serial.print(decode(voltage[1], xmax));
+            Serial.print(", ");
+            Serial.print(decode(voltage[2], xmax));
+            Serial.print(", ");
+            Serial.print(decode(voltage[3], xmax));
             Serial.println("");
 
             return (int)voltage[0];
@@ -489,7 +463,7 @@ void setup() {
 void loop() {
   if (numberOfSensors) {
     // display.clear();
-
+#if 0
     Serial.print("\n\n");
     Serial.print(String(millis() / 1000.0) + " sec");
     Serial.printf(" %i Dallas sensors found.\n", numberOfSensors);
@@ -520,6 +494,7 @@ void loop() {
             break;
       }
     }
+  #endif
   } else {
     Serial.println("No Dallas sensors.");
   }
