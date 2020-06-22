@@ -22,13 +22,13 @@ U8X8_SSD1306_128X64_NONAME_SW_I2C oled_display(DISPLAY_SDC, DISPLAY_SDA, DISPLAY
 
 #define ONEWIRE_PIN           17   // OneWire Dallas sensors are connected to this pin
 #define MAX_NUMBER_OF_SENSORS 10   // maximum number of Dallas sensors
-#define OW_PARASITE_POWER     0     // 0 = off, 1 = on
+#define OW_PARASITE_POWER     1     // 0 = off, 1 = on
 
 OneWire  ow(ONEWIRE_PIN);        // (a 4.7K pull-up resistor is necessary)
 
 void ow_write(byte data[], int length) {
   for (byte i = 0; i < length; i++) {
-    ow.write(data[i]);
+    ow.write(data[i], OW_PARASITE_POWER);
   }
 }
 
@@ -78,22 +78,9 @@ byte numberOfSensors;
 // == Dallas Semiconductior OneWire Devices...
 
 /*
- * DS18S20, DS18B20, DS1822 Temperature -- used for Temperature
+ * DS18S20, DS18B20 Temperature -- used for Temperature
  */
-int16_t read_DSTemperature(byte address[]) {
-  byte device_type;
-  switch (address[0]) {
-    case 0x10: // DS18S20
-      device_type = 1;
-      break;
-    case 0x22: // DS1822
-    case 0x28: // DS18B20
-      device_type = 0;
-      break;
-    default:
-      return 0;
-  }
-
+float read_DS18x20(byte address[]) {
   bool present = ow.reset();
   if (present) {
     byte data[12];
@@ -101,18 +88,22 @@ int16_t read_DSTemperature(byte address[]) {
     ow.select(address);
     ow.write(0x44, OW_PARASITE_POWER);        // start conversion, with parasite power off at the end
 
-    vTaskDelay(750 / portTICK_PERIOD_MS);     //wait for conversion ready
+    vTaskDelay(1 * portTICK_PERIOD_MS);     //wait for conversion ready
 
     present = ow.reset();
     if (present) {
       ow.select(address);
-      ow.write(0xBE);         // Read Scratchpad
+      ow.write(0xBE, OW_PARASITE_POWER);         // Read Scratchpad
+
       ow_read(data, 9);
       if (OneWire::crc8(data, 8) == data[8]) {
-        ow.reset();
 
+        // Convert the data to actual temperature
+        // because the result is a 16 bit signed integer, it should
+        // be stored to an "int16_t" type, which is always 16 bits
+        // even when compiled on a 32 bit processor.
         int16_t raw = (data[1] << 8) | data[0];
-        if (device_type) {
+        if (address[0] == 0x10) {
           raw = raw << 3; // 9 bit resolution default
           if (data[7] == 0x10) {
             // "count remain" gives full 12 bit resolution
@@ -126,15 +117,17 @@ int16_t read_DSTemperature(byte address[]) {
           else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
           //// default is 12 bit resolution, 750 ms conversion time
         }
+        float celsius = (float)raw / 16.0;
+        // fahrenheit = celsius * 1.8 + 32.0;
 
-        return raw;        
+        return celsius;
       }
     }
   }
 
   // CRC of temperature reading indicates an error, so we print a error message and discard this reading
   Serial.print("ERROR: read_DSTemperature() Not present or CRC not valid");
-  return 0;
+  return 0.0;
 }
 
 /*
@@ -225,25 +218,25 @@ int16_t read_DS2408(byte address[]) {
 void setup_DS2450(byte address[]) {
    ow.reset();
    ow.select(address);
-   ow.write(DS2450_WRITE_COMMAND, 0);
-   ow.write(DS2450_VCC_CONTROL_BYTE_ADDR_LO, 0);
-   ow.write(DS2450_VCC_CONTROL_BYTE_ADDR_HI, 0);
-   ow.write(0x00, 0);
+   ow.write(DS2450_WRITE_COMMAND, OW_PARASITE_POWER);
+   ow.write(DS2450_VCC_CONTROL_BYTE_ADDR_LO, OW_PARASITE_POWER);
+   ow.write(DS2450_VCC_CONTROL_BYTE_ADDR_HI, OW_PARASITE_POWER);
+   ow.write(0x00, OW_PARASITE_POWER);
    ow.read(); // crc lsb
    ow.read(); // crc msb
    ow.read(); // verify
 
    ow.reset();
    ow.select(address);
-   ow.write(DS2450_WRITE_COMMAND, 0);
-   ow.write(DS2450_CONTROL_STATUS_DATA_ADDR_LO, 0);
-   ow.write(DS2450_CONTROL_STATUS_DATA_ADDR_HI, 0);
+   ow.write(DS2450_WRITE_COMMAND, OW_PARASITE_POWER);
+   ow.write(DS2450_CONTROL_STATUS_DATA_ADDR_LO, OW_PARASITE_POWER);
+   ow.write(DS2450_CONTROL_STATUS_DATA_ADDR_HI, OW_PARASITE_POWER);
     for (int i = 0; i < 4; i++) {
-      ow.write(0 /*DS2450_8_BIT_RESOLUTION*/, 0);
+      ow.write(0 /*DS2450_8_BIT_RESOLUTION*/, OW_PARASITE_POWER);
       ow.read(); // crc
       ow.read();
       ow.read(); // verify data
-      ow.write(DS2450_POR_OFF_NO_ALARMS_5V_RANGE, 0);
+      ow.write(DS2450_POR_OFF_NO_ALARMS_5V_RANGE, OW_PARASITE_POWER);
       ow.read(); // crc
       ow.read();
       ow.read(); // verify data
@@ -266,7 +259,7 @@ int16_t read_DS2450(byte address[], int voltage[]) {
       ow_write(data, 3);
       ow_read(data + 3, 2); // CRC16 of command byte, select and control.
 
-      vTaskDelay(4 * portTICK_PERIOD_MS);     //wait for conversion ready
+      vTaskDelay(1 * portTICK_PERIOD_MS);     //wait for conversion ready
 
       if (ow.reset()) {
         ow.select(address);
@@ -364,6 +357,7 @@ float wind_speed(uint32_t count) {
 
 /*
  * Decode Wind Direction from quad voltages reported by DS2450
+ * http://sheepdogsoftware.co.uk/sc3wmw.htm
  */
 int wind_direction_decode(int voltage) {
    if (voltage > 47000) return 2;
@@ -437,13 +431,13 @@ void taskReadSensors(void * pvParameters) {
     vTaskDelete(NULL);
   }
 
-  while (TRUE) {
+  while (1 == 1) {
     for (byte thisSensor = 0; thisSensor < numberOfSensors; thisSensor++) {
       switch (sensor[thisSensor].addr[0]) { // the first ROM byte indicates which chip
         case 0x10:  // DS18S20 or old DS1820
         case 0x22:  // DS1822
         case 0x28:  // DS18B20
-          sensor[thisSensor].data.temperature = read_DSTemperature(sensor[thisSensor].addr);
+          sensor[thisSensor].data.temperature = read_DS18x20(sensor[thisSensor].addr);
           break;
         case 0x29:  // DS2408
           sensor[thisSensor].data.value = read_DS2408(sensor[thisSensor].addr);
@@ -459,7 +453,7 @@ void taskReadSensors(void * pvParameters) {
       }    
     }
 
-    vTaskDelay(10000 / portTICK_PERIOD_MS); // 15 seconds
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // 15 seconds
   }
 }
 
@@ -513,7 +507,7 @@ void loop() {
           case 0x10:
           case 0x22:
           case 0x28:
-            Serial.println(sensor[thisSensor].name + ": " + String((float)sensor[thisSensor].data.temperature / 16.0) + "°C");
+            Serial.println(sensor[thisSensor].name + ": " + String(sensor[thisSensor].data.temperature) + "°C");
             break;
           case 0x1D:  // "DS2423 RAM/Counter";
             Serial.println(sensor[thisSensor].name + ": " + String(sensor[thisSensor].data.count));
@@ -532,7 +526,7 @@ void loop() {
               String wd = wind_direction_rose(sensor[thisSensor].data.voltage);
               Serial.println("\t: " + wd);
               #if defined(OLED_ENABLED)
-              oled_display.drawString(0, 7, wd.c_str());
+              oled_display.drawString(0, 6, wd.c_str());
               #endif
             }
             break;
