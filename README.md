@@ -40,3 +40,8 @@ OneWire via Weather Toys -- http://www.weathertoys.net/weathertoys/downloads.htm
 
 Heltec ESP32 WiFi Lora -- https://robotzero.one/heltec-wifi-kit-32/
 
+http://sheepdogsoftware.co.uk/sc3wmw.htm
+https://github.com/ckaczor/WeatherService/blob/master/Devices/WindDirectionDevice.cs
+https://chriskaczor.com/2018/02/16/weather-station/
+https://forum.arduino.cc/index.php?topic=7620.0
+https://web.archive.org/web/20090220144024/http://www.paulandkate.f2s.com/wordpress/wp-content/uploads/2009/01/_1wireweatherstation.pde

@@ -22,7 +22,7 @@ U8X8_SSD1306_128X64_NONAME_SW_I2C oled_display(DISPLAY_SDC, DISPLAY_SDA, DISPLAY
 
 #define ONEWIRE_PIN           17   // OneWire Dallas sensors are connected to this pin
 #define MAX_NUMBER_OF_SENSORS 10   // maximum number of Dallas sensors
-#define OW_PARASITE_POWER     1     // 0 = off, 1 = on
+#define OW_PARASITE_POWER     0     // 0 = off, 1 = on
 
 OneWire  ow(ONEWIRE_PIN);        // (a 4.7K pull-up resistor is necessary)
 
